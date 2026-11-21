@@ -1,0 +1,27 @@
+# Terraform cache, local state, plans and crash logs.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+.terraform.tfstate.lock.info
+
+# Local settings; commit examples and .terraform.lock.hcl.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+.terraformrc
+terraform.rc
+.env
+.env.*
+!.env.example
+
+# Credentials and Ansible artifacts.
+.oci/
+*.pem
+*.key
+k3s.yaml
+ansible/inventory.ini
+*.retry

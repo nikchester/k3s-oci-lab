@@ -1,0 +1,99 @@
+---
+- name: Configure the single-node K3s lab
+  hosts: k3s_lab
+  become: true
+  gather_facts: true
+
+  vars:
+    k3s_version: "v1.37.1+k3s1"
+    k3s_arm64_sha256: "a1561ca4aef8b99f5588a840d4468ac39c8c1cd92470bbcb9634823fa221741a"
+
+  tasks:
+    - name: Confirm supported host architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['architecture'] == 'aarch64'
+        fail_msg: This playbook requires Ubuntu ARM64 (OCI A1).
+
+    - name: Install OS packages needed by K3s
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - iptables
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Download and verify pinned K3s ARM64 binary
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s-arm64"
+        dest: /usr/local/bin/k3s
+        checksum: "sha256:{{ k3s_arm64_sha256 }}"
+        mode: '0755'
+        owner: root
+        group: root
+      notify: Restart K3s
+
+    - name: Install K3s systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/k3s.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=K3s single-node lab
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=exec
+          ExecStart=/usr/local/bin/k3s server --disable=traefik --disable=servicelb
+          Restart=always
+          RestartSec=5s
+          Delegate=yes
+          KillMode=process
+          LimitNOFILE=1048576
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart K3s
+
+    - name: Apply any pending K3s restart before health checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for K3s to generate its kubeconfig
+      ansible.builtin.wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+        timeout: 300
+
+    - name: Wait for Kubernetes node readiness
+      ansible.builtin.command: /usr/local/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml wait --for=condition=Ready node --all --timeout=20s
+      register: node_ready
+      until: node_ready.rc == 0
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: Check CoreDNS rollout
+      ansible.builtin.command: /usr/local/bin/k3s kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n kube-system rollout status deployment/coredns --timeout=30s
+      register: coredns_rollout
+      until: coredns_rollout.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+
+  handlers:
+    - name: Restart K3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: restarted
+        daemon_reload: true
